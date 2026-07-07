@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "C'PRO",
+    "slug": "cpro",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "cpro",
+    "splash": {
+      "backgroundColor": "#1B5E20"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cpro.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1B5E20"
+      },
+      "package": "com.cpro.app",
+      "minSdkVersion": 26,
+      "targetSdkVersion": 35
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Autorisez C’PRO à sélectionner votre logo."
+        }
+      ]
+    ]
+  }
+}

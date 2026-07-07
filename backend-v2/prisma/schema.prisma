@@ -1,0 +1,295 @@
+// C'PRO - Schéma Prisma - SQLite (Dev)
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String
+  emailVerified Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  role          String    @default("USER")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  profile        Profile?
+  transactions   Transaction[]
+  equipments     Equipment[]
+  clients        Client[]
+  pushTokens     PushToken[]
+  notifications  Notification[]
+  expertRequests ExpertRequest[]
+
+  @@map("users")
+}
+
+model Profile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nom               String
+  prenom            String?
+  telephone         String?
+  telephoneMomo     String?
+  metierSlug        String
+  lieu              String
+  capitalDepart     Float
+  modeFinancement   String
+  devise            String   @default("XOF")
+  objectifCaMensuel Float?
+  photoUrl          String?
+  logoUrl           String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("profiles")
+}
+
+model Transaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            String
+  montant         Float
+  categorie       String
+  sousCategorie   String?
+  quantite        Int?
+  prixUnitaire    Float?
+  modePaiement    String   // "CASH", "MOMO_MTN", "MOMO_MOOV", "BANK", "CREDIT"
+  clientId        String?
+  client          Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  date            DateTime
+  notes           String?
+
+  // Mobile Money (Phase 2 - OCR)
+  momoReference   String?  // Référence SMS (ex: MP240605.1234.A12345)
+  momoPhone       String?  // Numéro émetteur/destinataire
+  momoOperator    String?  // "MTN", "MOOV"
+  proofImageUrl   String?  // Photo SMS stockée
+  ocrExtracted    String?  // Texte brut extrait par OCR (JSON)
+  verified        Boolean  @default(false)  // Validé manuellement
+
+  syncedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@map("transactions")
+}
+
+model Equipment {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nom             String
+  typeSlug        String
+  valeurAchat     Float
+  dureeVieAns     Int
+  dateAchat       DateTime
+  amortAnnuel     Float
+  amortMensuel    Float
+  amortJournalier Float
+  valeurResiduelle Float
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("equipments")
+}
+
+model Client {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nom             String
+  prenom          String?
+  telephone       String?
+  email           String?
+  adresse         String?
+  soldeCredit     Float    @default(0)
+  limitCredit     Float?
+  transactions    Transaction[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("clients")
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  email     String
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("otp_codes")
+}
+
+model Metier {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  nom         String
+  description String?
+  icon        String?
+
+  // Classification du profil métier
+  profil              String   @default("COMMERCANT")  // "PRODUCTEUR", "COMMERCANT", "PRESTATAIRE"
+  besoinFinancement   String   @default("MOYEN")       // "ELEVE", "MOYEN", "FAIBLE"
+  typeFinancement     String?  // JSON: ["fonds-roulement", "equipement", "credit-campagne"]
+  frequenceCash       String   @default("mensuel")     // "quotidien", "hebdo", "mensuel", "saisonnier"
+
+  // Configuration UI
+  dashboardType       String   @default("BENEFICE")    // "TRESORERIE", "BENEFICE", "SIMPLE"
+  modulesActifs       String?  // JSON: ["stock", "commandes", "equipements", "financement"]
+  alertesActives      String?  // JSON: ["stock-bas", "tresorerie-basse", "credit-client"]
+
+  // Données métier indicatives
+  margeTypique        Float?   // Ex: 0.35 pour 35%
+  cycleVenteJours     Int?     // Jours entre achat matière et vente
+
+  ordre       Int      @default(0)
+  actif       Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  categories  CategorieTransaction[]
+
+  @@map("metiers")
+}
+
+model CategorieTransaction {
+  id          String   @id @default(uuid())
+  metierId    String
+  metier      Metier   @relation(fields: [metierId], references: [id], onDelete: Cascade)
+  type        String   // REVENU, CHARGE
+  nom         String
+  description String?
+  ordre       Int      @default(0)
+  actif       Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("categories_transaction")
+}
+
+model TypeAmortissement {
+  id              String   @id @default(uuid())
+  slug            String   @unique
+  nom             String
+  description     String?
+  dureeVieAns     Float
+  tauxAnnuel      Float    // = 100 / dureeVieAns
+  exemples        String?  // JSON: ["exemple1", "exemple2"]
+  ordre           Int      @default(0)
+  actif           Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("types_amortissement")
+}
+
+model TermeGlossaire {
+  id          String   @id @default(uuid())
+  terme       String   @unique
+  definition  String
+  exemple     String?
+  categorie   String   // "comptabilite", "gestion", "fiscal", "juridique"
+  ordre       Int      @default(0)
+  actif       Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("glossaire")
+}
+
+model FichePedagogique {
+  id          String   @id @default(uuid())
+  slug        String   @unique
+  titre       String
+  description String
+  contenu     String   // JSON: sections avec texte, listes, exemples
+  categorie   String   // "compta-base", "gestion-tresorerie", "fiscalite", "croissance"
+  duree       Int?     // durée lecture en minutes
+  ordre       Int      @default(0)
+  actif       Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("fiches_pedagogiques")
+}
+
+model IMF {
+  id           String   @id @default(uuid())
+  slug         String   @unique
+  nom          String
+  sigle        String?
+  type         String   // "imf", "banque", "cooperative"
+  ville        String
+  quartier     String?
+  adresse      String?
+  telephone    String?
+  email        String?
+  siteWeb      String?
+  description  String?
+  services     String?  // JSON: ["micro-credit", "epargne", "assurance"]
+  montantMin   Float?
+  montantMax   Float?
+  tauxInteret  String?  // ex: "12-18% par an"
+  ordre        Int      @default(0)
+  actif        Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("imf")
+}
+
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  platform  String   // "android", "ios", "web"
+  deviceId  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("push_tokens")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  data      String?  // JSON: custom data
+  type      String   // "transaction", "reminder", "info"
+  read      Boolean  @default(false)
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
+
+model ExpertRequest {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reason      String
+  details     String?
+  planCode    String
+  metierSlug  String?
+  status      String   @default("PENDING")
+  contextJson String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("expert_requests")
+}

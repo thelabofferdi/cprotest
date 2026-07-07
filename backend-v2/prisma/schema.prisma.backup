@@ -1,0 +1,1193 @@
+# C'PRO — Nouvelle Architecture Technique (Fait Maison)
+
+**Date:** 2026-06-05  
+**Migration:** AWS → Stack Open Source + Prisma  
+**Objectif:** Maîtrise totale, coûts maîtrisés, déploiement flexible
+
+---
+
+## 🚨 DÉCISION STRATÉGIQUE : Abandon AWS
+
+### Pourquoi quitter AWS ?
+
+❌ **Problèmes AWS** :
+- Coûts imprévisibles après free tier
+- Complexité CDK / Lambda / DynamoDB
+- Vendor lock-in
+- Courbe d'apprentissage élevée
+- Debugging difficile (CloudWatch Logs)
+- Latence Lambda cold start
+
+✅ **Avantages Stack Fait Maison** :
+- Coûts fixes prévisibles (VPS ou PaaS)
+- Contrôle total du code
+- Debugging local facile
+- Stack standard (Node.js + PostgreSQL)
+- Migration simple entre hébergeurs
+- Communauté + documentation riche
+
+---
+
+## 🏗️ NOUVELLE STACK TECHNIQUE
+
+### Backend
+
+| Composant | Technologie Recommandée | Alternative | Justification |
+|---|---|---|---|
+| **Framework** | **NestJS** | Express, Fastify | Structure modulaire, TypeScript natif, DI, génération auto endpoints |
+| **ORM** | **Prisma** | TypeORM, Sequelize | Type-safety, migrations auto, excellent DX, support PostgreSQL/MySQL/SQLite |
+| **Base de données** | **PostgreSQL 16** | MySQL 8, SQLite | Robuste, JSON support, full-text search, scalable |
+| **Authentification** | **JWT + bcrypt** | Passport.js, Auth.js | Simple, stateless, compatible mobile |
+| **Validation** | **class-validator + class-transformer** | Zod, Joi | Intégré NestJS, décorateurs TypeScript |
+| **Documentation API** | **Swagger (OpenAPI 3.0)** | Postman | Auto-généré depuis NestJS, interactif |
+| **Tests** | **Jest + Supertest** | Vitest | Natif NestJS, mocking facile |
+| **Email** | **Resend** | Brevo, Mailgun, Nodemailer+SMTP | API simple, gratuit 3000/mois, templates React |
+| **Stockage Fichiers** | **Cloudflare R2** | MinIO, Local FS | S3-compatible, gratuit 10Go, CDN intégré |
+| **Notifications Push** | **FCM (Firebase Cloud Messaging)** | OneSignal | Gratuit illimité, SDK React Native |
+| **Génération PDF** | **pdf-lib (Node.js)** | PDFKit, Puppeteer | Léger, pas de navigateur headless |
+| **Jobs asynchrones** | **Bull (Redis)** | BullMQ, Agenda | Queue robuste, retry, dashboard |
+| **Cache** | **Redis 7** | Memcached, in-memory | Rapide, sessions, pub/sub |
+| **Logging** | **Pino** | Winston | Ultra rapide, JSON structuré |
+| **Monitoring** | **Sentry** | Rollbar | Gratuit 5k events/mois, source maps |
+
+---
+
+## 📊 SCHÉMA D'ARCHITECTURE
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      FRONTEND                                │
+│  React Native (iOS/Android) + Expo                           │
+│  - Offline-first (SQLite via Expo SQLite)                    │
+│  - Sync périodique avec backend                              │
+│  - JWT stocké en SecureStore                                 │
+└────────────────────┬────────────────────────────────────────┘
+                     │ HTTPS (REST API)
+                     │
+┌────────────────────▼────────────────────────────────────────┐
+│                   API GATEWAY (Nginx)                        │
+│  - Rate limiting                                             │
+│  - CORS                                                      │
+│  - SSL/TLS termination                                       │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────────┐
+│              BACKEND (NestJS + TypeScript)                   │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  MODULES                                             │   │
+│  │  - AuthModule (JWT, bcrypt, refresh tokens)         │   │
+│  │  - UsersModule (CRUD profils)                       │   │
+│  │  - TransactionsModule (sync, CRUD, calculs)         │   │
+│  │  - DashboardModule (8 indicateurs)                  │   │
+│  │  - EquipmentsModule (CRUD, amortissements)          │   │
+│  │  - ClientsModule (créances)                         │   │
+│  │  - ForecastModule (prévisions, épargne)             │   │
+│  │  - DocumentsModule (génération PDF)                 │   │
+│  │  - NotificationsModule (FCM push)                   │   │
+│  │  - FiscalModule (déclarations DGI)                  │   │
+│  │  - AdminModule (dashboard comptable)                │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  SERVICES                                            │   │
+│  │  - PrismaService (ORM singleton)                    │   │
+│  │  - EmailService (Resend)                            │   │
+│  │  - StorageService (Cloudflare R2)                   │   │
+│  │  - PdfService (pdf-lib)                             │   │
+│  │  - NotificationService (FCM)                        │   │
+│  │  - CacheService (Redis)                             │   │
+│  │  - QueueService (Bull)                              │   │
+│  └──────────────────────────────────────────────────────┘   │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+    ┌────────────────┴────────────────┐
+    │                                 │
+┌───▼─────────────┐      ┌───────────▼──────────┐
+│  PostgreSQL 16  │      │  Redis 7             │
+│  - Users        │      │  - Sessions          │
+│  - Transactions │      │  - Cache             │
+│  - Profiles     │      │  - Bull Queue        │
+│  - Documents    │      └──────────────────────┘
+│  - IMF Config   │
+│  - etc.         │      ┌──────────────────────┐
+└─────────────────┘      │  Cloudflare R2       │
+                         │  - PDFs générés      │
+                         │  - Logos, images     │
+                         └──────────────────────┘
+```
+
+---
+
+## 🗄️ SCHÉMA PRISMA COMPLET
+
+### prisma/schema.prisma
+
+```prisma
+// Générateur Prisma Client
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Source de données
+datasource db {
+  provider = "postgresql" // ou "mysql" ou "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ══════════════════════════════════════════════════════════════
+// AUTHENTIFICATION & UTILISATEURS
+// ══════════════════════════════════════════════════════════════
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String    // bcrypt hash
+  emailVerified Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  role          UserRole  @default(USER)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+  
+  // Relations
+  profile       Profile?
+  transactions  Transaction[]
+  equipments    Equipment[]
+  clients       Client[]
+  goals         SavingGoal[]
+  documents     Document[]
+  notifications Notification[]
+  subscription  Subscription?
+  missions      Mission[]
+  momoTx        MoMoTransaction[]
+  fiscalDecl    FiscalDeclaration[]
+  pushTokens    PushToken[]
+  
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  USER       // Micro-entrepreneur classique
+  VENDOR     // Vendeur TikTok/WhatsApp
+  PRO        // Client Services Comptables Pro
+  ADMIN      // Admin cabinet C'PRO
+  DGI        // Accès interface DGI
+}
+
+model Profile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  nom               String
+  prenom            String?
+  telephone         String?
+  telephoneMomo     String?  // Numéro Mobile Money
+  metierSlug        String   // Référence vers CONFIG
+  lieu              String   // Ville/commune d'exercice
+  
+  capitalDepart     Float    // Capital initial FCFA
+  modeFinancement   String   // Fonds propres, Emprunt, Tontine, Mixte
+  devise            String   @default("XOF")
+  
+  objectifCaMensuel Float?   // Objectif CA mensuel (optionnel)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@index([userId])
+  @@index([metierSlug])
+  @@map("profiles")
+}
+
+// ══════════════════════════════════════════════════════════════
+// TRANSACTIONS COMPTABLES
+// ══════════════════════════════════════════════════════════════
+
+model Transaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type            TxType   // RECETTE | DEPENSE
+  montant         Float    // Montant FCFA
+  categorie       String   // ID catégorie selon métier
+  sousCategorie   String?
+  
+  quantite        Int?
+  prixUnitaire    Float?
+  
+  modePaiement    PaymentMode
+  clientId        String?  // Si vente à crédit
+  client          Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  
+  date            DateTime // Date de la transaction
+  notes           String?  @db.Text
+  
+  syncedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+  
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([clientId])
+  @@map("transactions")
+}
+
+enum TxType {
+  RECETTE
+  DEPENSE
+}
+
+enum PaymentMode {
+  ESPECES
+  MOBILE_MONEY_MTN
+  MOBILE_MONEY_MOOV
+  FEDAPAY
+  KKIAPAY
+  CREDIT_CLIENT
+  CHEQUE
+  VIREMENT
+}
+
+// ══════════════════════════════════════════════════════════════
+// ÉQUIPEMENTS & AMORTISSEMENTS
+// ══════════════════════════════════════════════════════════════
+
+model Equipment {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  nom             String   // Ex: Moto, Congélateur, Machine à coudre
+  typeSlug        String   // Référence vers CONFIG amortissements
+  valeurAchat     Float    // Prix d'achat FCFA
+  dureeVieAns     Int      // Durée de vie en années
+  
+  dateAchat       DateTime
+  
+  // Calculs automatiques
+  amortAnnuel     Float    // valeurAchat / dureeVieAns
+  amortMensuel    Float    // amortAnnuel / 12
+  amortJournalier Float    // amortAnnuel / 365
+  
+  valeurResiduelle Float   // valeurAchat - (amortJournalier × jours écoulés)
+  
+  isActive        Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@index([typeSlug])
+  @@map("equipments")
+}
+
+// ══════════════════════════════════════════════════════════════
+// CLIENTS & CRÉANCES
+// ══════════════════════════════════════════════════════════════
+
+model Client {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  nom             String
+  prenom          String?
+  telephone       String?
+  email           String?
+  adresse         String?
+  
+  soldeCredit     Float    @default(0) // Montant dû par le client
+  limitCredit     Float?   // Limite de crédit autorisée
+  
+  transactions    Transaction[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@map("clients")
+}
+
+// ══════════════════════════════════════════════════════════════
+// OBJECTIFS D'ÉPARGNE
+// ══════════════════════════════════════════════════════════════
+
+model SavingGoal {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  titre           String   // Ex: Acheter un terrain
+  montantCible    Float    // FCFA
+  montantActuel   Float    @default(0)
+  epoqueParMois   Float    // Capacité d'épargne mensuelle
+  
+  dateObjectif    DateTime // Date visée
+  dateAtteinte    DateTime? // Date réelle si atteint
+  
+  statut          GoalStatus @default(EN_COURS)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@map("saving_goals")
+}
+
+enum GoalStatus {
+  EN_COURS
+  ATTEINT
+  ABANDONNE
+}
+
+// ══════════════════════════════════════════════════════════════
+// DOCUMENTS GÉNÉRÉS
+// ══════════════════════════════════════════════════════════════
+
+model Document {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type            DocType
+  titre           String
+  numero          String   // CPRO-YYYY-NNNN
+  
+  clientNom       String?
+  clientEmail     String?
+  
+  montantHT       Float?
+  montantTVA      Float?
+  montantTTC      Float?
+  
+  dateEmission    DateTime
+  dateEcheance    DateTime?
+  
+  statut          DocStatus @default(BROUILLON)
+  
+  // Stockage
+  storagePath     String?  // Chemin Cloudflare R2
+  storageUrl      String?  // URL signée temporaire
+  
+  // Transformation
+  sourceDocId     String?  // Si transformé depuis un devis
+  sourceDoc       Document? @relation("DocTransform", fields: [sourceDocId], references: [id])
+  transformedDocs Document[] @relation("DocTransform")
+  
+  metadata        Json?    // Données spécifiques au type
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId, type])
+  @@index([numero])
+  @@map("documents")
+}
+
+enum DocType {
+  DEVIS_1
+  DEVIS_2
+  DEVIS_3
+  DEVIS_4
+  FACTURE_PRODUIT
+  FACTURE_SERVICE
+  RH_FICHE_PAIE_PRESTATAIRE
+  RH_FICHE_PAIE_SALARIE
+  RH_RECU_TACHE
+  CONTRAT_CDI
+  CONTRAT_PRESTATION
+}
+
+enum DocStatus {
+  BROUILLON
+  EMIS
+  ENVOYE
+  PAYE
+  ANNULE
+}
+
+// ══════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ══════════════════════════════════════════════════════════════
+
+model PushToken {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  token           String   @unique // FCM token
+  platform        String   // ios | android
+  
+  isActive        Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@map("push_tokens")
+}
+
+model Notification {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type            NotifType
+  titre           String
+  message         String   @db.Text
+  
+  lu              Boolean  @default(false)
+  
+  metadata        Json?
+  
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime // TTL 90 jours
+  
+  @@index([userId, lu])
+  @@index([expiresAt])
+  @@map("notifications")
+}
+
+enum NotifType {
+  ALERTE_DEPENSES
+  ALERTE_SR
+  ALERTE_RESULTAT_NEGATIF
+  RAPPEL_SAISIE
+  OBJECTIF_EPARGNE
+  REMBOURSEMENT_DETTE
+  SYSTEME
+}
+
+// ══════════════════════════════════════════════════════════════
+// SERVICES COMPTABLES PRO (VOLET B)
+// ══════════════════════════════════════════════════════════════
+
+model Subscription {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  plan            SubPlan
+  montantMensuel  Float    // 10000, 35000, 120000 FCFA
+  
+  statut          SubStatus @default(ACTIF)
+  
+  dateDebut       DateTime
+  dateFin         DateTime?
+  
+  autoRenew       Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+enum SubPlan {
+  ESSENTIELLE  // 10 000 FCFA
+  PRO          // 35 000 FCFA
+  BUSINESS     // 120 000 FCFA
+}
+
+enum SubStatus {
+  ACTIF
+  SUSPENDU
+  EXPIRE
+  ANNULE
+}
+
+model Mission {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type            MissionType
+  titre           String
+  description     String?  @db.Text
+  
+  montant         Float
+  statut          MissionStatus @default(BROUILLON)
+  
+  dateDebut       DateTime?
+  dateEcheance    DateTime?
+  dateTerminee    DateTime?
+  
+  rapportPath     String?  // Chemin rapport PDF
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@map("missions")
+}
+
+enum MissionType {
+  AUDIT_COMPTABLE
+  DECLARATION_FISCALE
+  BILAN_ANNUEL
+  FORMATION
+  CONSEIL
+}
+
+enum MissionStatus {
+  BROUILLON
+  EN_COURS
+  TERMINEE
+  PAYEE
+  ANNULEE
+}
+
+// ══════════════════════════════════════════════════════════════
+// FISCALITÉ DGI (VOLET C)
+// ══════════════════════════════════════════════════════════════
+
+model MoMoTransaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  provider        String   // MTN | MOOV
+  transactionRef  String   @unique // Référence externe
+  
+  montant         Float
+  type            String   // SEND | RECEIVE
+  
+  numeroEmetteur  String?
+  numeroReceveur  String?
+  
+  statut          String   // SUCCESS | PENDING | FAILED
+  
+  metadata        Json?
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([userId])
+  @@index([transactionRef])
+  @@map("momo_transactions")
+}
+
+model FiscalDeclaration {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  annee           Int
+  mois            Int
+  
+  chiffreAffaires Float
+  chargesTotal    Float
+  resultatNet     Float
+  
+  typeImpot       String   // IMPOT_SYNTHETIQUE | TAXE_PROFESSIONNELLE
+  montantImpot    Float
+  tauxApplique    Float    // % selon barème
+  
+  statut          DeclStatus @default(BROUILLON)
+  
+  dateSoumission  DateTime?
+  datePaiement    DateTime?
+  
+  referencePayment String?  // Référence paiement Mobile Money
+  recuPath        String?   // Chemin reçu PDF
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@unique([userId, annee, mois])
+  @@index([userId])
+  @@map("fiscal_declarations")
+}
+
+enum DeclStatus {
+  BROUILLON
+  SOUMISE
+  PAYEE
+  REJETEE
+}
+
+model BadgeConformite {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  
+  estConforme     Boolean  @default(false)
+  
+  // Critères
+  facturesEmises  Int      @default(0)
+  declEnJour      Boolean  @default(false)
+  paiementsOk     Boolean  @default(false)
+  
+  dateObtention   DateTime?
+  dateExpiration  DateTime?
+  
+  imagePath       String?  // Badge PNG/SVG généré
+  
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@map("badges_conformite")
+}
+
+// ══════════════════════════════════════════════════════════════
+// CONFIGURATION (SEED DATA)
+// ══════════════════════════════════════════════════════════════
+
+model Metier {
+  slug            String   @id
+  label           String
+  
+  categories      Json     // Array de catégories dépenses
+  formules        Json     // Array de formules spécifiques
+  equipements     Json     // Array d'équipements par défaut
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("metiers_config")
+}
+
+model Amortissement {
+  id              String   @id @default(uuid())
+  typeSlug        String   @unique
+  label           String
+  
+  dureeAns        Int
+  valeurType      Float    // Valeur type en FCFA
+  
+  updatedAt       DateTime @updatedAt
+  
+  @@map("amortissements_config")
+}
+
+model IMF {
+  slug            String   @id
+  nom             String
+  description     String?  @db.Text
+  
+  montantMin      Float
+  montantMax      Float
+  tauxAnnuel      Float
+  dureeMaxMois    Int
+  
+  criteres        Json     // Array de critères éligibilité
+  contact         String?
+  
+  ville           String?
+  zone            String?  // nationale, rurale, urbaine
+  
+  accepteMobileMoney Boolean @default(false)
+  
+  updatedAt       DateTime @updatedAt
+  
+  @@index([zone])
+  @@map("imf_config")
+}
+
+model ContenuAcademie {
+  id              String   @id @default(uuid())
+  type            ContentType
+  
+  slug            String   @unique
+  titre           String
+  explication     String?  @db.Text
+  contenu         String?  @db.Text
+  conseil         String?  @db.Text
+  
+  niveau          String?  // Débutant, Intermédiaire, Avancé
+  videoUrl        String?
+  dureeMin        Int?
+  
+  ordre           Int      @default(0)
+  
+  updatedAt       DateTime @updatedAt
+  
+  @@index([type])
+  @@map("contenus_academie")
+}
+
+enum ContentType {
+  GLOSSAIRE
+  FICHE
+  VIDEO
+}
+```
+
+---
+
+## 🚀 HÉBERGEMENT & DÉPLOIEMENT
+
+### Options Hébergement (par ordre de recommandation)
+
+#### 1. **Railway.app** (RECOMMANDÉ) ⭐
+
+**Avantages** :
+- Gratuit : $5/mois crédit (suffisant pour dev/beta)
+- PostgreSQL inclus
+- Redis inclus
+- Déploiement Git auto
+- Variables d'env UI
+- Logs en temps réel
+- Scaling facile
+- SSL auto
+
+**Coût estimé Beta** : $0-10/mois
+
+**Setup** :
+```bash
+# 1. Installer Railway CLI
+npm i -g @railway/cli
+
+# 2. Login
+railway login
+
+# 3. Init projet
+railway init
+
+# 4. Link services
+railway add postgresql redis
+
+# 5. Deploy
+railway up
+```
+
+#### 2. **Render.com**
+
+**Avantages** :
+- Plan gratuit (750h/mois)
+- PostgreSQL gratuit (expire 90j)
+- Auto deploy GitHub
+- SSL inclus
+
+**Limites** :
+- Cold start (instance sleep après 15min inactivité)
+- PostgreSQL gratuit limité
+
+#### 3. **VPS Contabo/Hetzner** (Production)
+
+**Avantages** :
+- Coûts fixes bas (~5€/mois)
+- Ressources dédiées
+- Pas de limites
+- Full control
+
+**Inconvénients** :
+- Setup manuel
+- Maintenance (updates, backups)
+- DevOps skills requis
+
+---
+
+## 📦 MIGRATION DEPUIS AWS — PLAN D'ACTION
+
+### Étape 1 : Setup Projet Backend ✅
+
+```bash
+# Créer nouveau dossier backend-v2
+cd /home/hope/labs/cpro
+mkdir backend-v2 && cd backend-v2
+
+# Init NestJS
+npm i -g @nestjs/cli
+nest new . --package-manager npm
+
+# Installer dépendances
+npm install @prisma/client prisma
+npm install bcrypt jsonwebtoken
+npm install class-validator class-transformer
+npm install @nestjs/jwt @nestjs/passport passport-jwt
+npm install @nestjs/config
+npm install pdf-lib
+npm install resend
+npm install @aws-sdk/client-s3 # Pour Cloudflare R2 (S3-compatible)
+npm install bull @nestjs/bull
+npm install redis ioredis
+npm install firebase-admin # FCM push
+
+npm install -D @types/bcrypt @types/jsonwebtoken @types/passport-jwt
+```
+
+### Étape 2 : Setup Prisma ✅
+
+```bash
+# Init Prisma
+npx prisma init
+
+# Créer schema (copier le schema.prisma ci-dessus)
+# Éditer prisma/schema.prisma
+
+# Variables .env
+DATABASE_URL="postgresql://user:password@localhost:5432/cpro?schema=public"
+```
+
+### Étape 3 : Migrations Données AWS → PostgreSQL
+
+**Stratégie** :
+1. Exporter données DynamoDB (scan table `cpro-main`)
+2. Script de transformation JSON → SQL
+3. Seed Prisma avec données transformées
+
+```typescript
+// scripts/migrate-from-dynamodb.ts
+import { PrismaClient } from '@prisma/client';
+import * as fs from 'fs';
+
+const prisma = new PrismaClient();
+
+async function migrate() {
+  // Lire export DynamoDB
+  const dynamoData = JSON.parse(fs.readFileSync('./dynamo-export.json', 'utf-8'));
+  
+  // Transformer et insérer
+  for (const item of dynamoData.Items) {
+    if (item.PK.startsWith('USER#') && item.SK === 'PROFILE#') {
+      await prisma.profile.create({
+        data: {
+          userId: item.userId,
+          nom: item.nom,
+          metierSlug: item.metierSlug,
+          // etc.
+        },
+      });
+    }
+    
+    if (item.PK.startsWith('USER#') && item.SK.startsWith('TX#')) {
+      await prisma.transaction.create({
+        data: {
+          userId: item.userId,
+          type: item.type,
+          montant: item.montant,
+          // etc.
+        },
+      });
+    }
+    
+    // etc. pour chaque type d'entité
+  }
+  
+  console.log('Migration terminée');
+}
+
+migrate();
+```
+
+### Étape 4 : Architecture NestJS Modules
+
+```
+src/
+├── main.ts
+├── app.module.ts
+├── common/
+│   ├── decorators/
+│   ├── filters/
+│   ├── guards/
+│   ├── interceptors/
+│   └── pipes/
+├── config/
+│   └── configuration.ts
+├── prisma/
+│   ├── prisma.module.ts
+│   └── prisma.service.ts
+├── auth/
+│   ├── auth.module.ts
+│   ├── auth.controller.ts
+│   ├── auth.service.ts
+│   ├── dto/
+│   ├── guards/
+│   └── strategies/
+├── users/
+│   ├── users.module.ts
+│   ├── users.controller.ts
+│   └── users.service.ts
+├── profiles/
+│   └── (idem)
+├── transactions/
+│   └── (idem)
+├── dashboard/
+│   └── (idem)
+├── equipments/
+│   └── (idem)
+├── clients/
+│   └── (idem)
+├── forecast/
+│   └── (idem)
+├── documents/
+│   └── (idem)
+├── notifications/
+│   └── (idem)
+├── fiscal/
+│   └── (idem)
+└── admin/
+    └── (idem)
+```
+
+---
+
+## 🔐 SÉCURITÉ
+
+### Authentification JWT
+
+```typescript
+// auth/auth.service.ts
+import * as bcrypt from 'bcrypt';
+import { JwtService } from '@nestjs/jwt';
+
+export class AuthService {
+  async register(email: string, password: string) {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await this.prisma.user.create({
+      data: { email, password: hashedPassword },
+    });
+    return this.generateTokens(user);
+  }
+  
+  async login(email: string, password: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) throw new UnauthorizedException();
+    
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) throw new UnauthorizedException();
+    
+    return this.generateTokens(user);
+  }
+  
+  private generateTokens(user: User) {
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    
+    return {
+      accessToken: this.jwtService.sign(payload, { expiresIn: '15m' }),
+      refreshToken: this.jwtService.sign(payload, { expiresIn: '7d' }),
+    };
+  }
+}
+```
+
+### Guards & Decorators
+
+```typescript
+// common/decorators/current-user.decorator.ts
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export const CurrentUser = createParamDecorator(
+  (data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.user; // Injecté par JwtAuthGuard
+  },
+);
+
+// Usage dans controller
+@Get('profile')
+@UseGuards(JwtAuthGuard)
+async getProfile(@CurrentUser() user: User) {
+  return user;
+}
+```
+
+---
+
+## 📧 EMAIL (Resend)
+
+```typescript
+// email/email.service.ts
+import { Resend } from 'resend';
+
+export class EmailService {
+  private resend = new Resend(process.env.RESEND_API_KEY);
+  
+  async sendOTP(email: string, code: string) {
+    await this.resend.emails.send({
+      from: 'C\'PRO <noreply@cpro.app>',
+      to: email,
+      subject: 'Votre code de vérification C\'PRO',
+      html: `
+        <h1>Bienvenue sur C'PRO</h1>
+        <p>Votre code de vérification est : <strong>${code}</strong></p>
+        <p>Ce code expire dans 10 minutes.</p>
+      `,
+    });
+  }
+  
+  async sendWelcome(email: string, nom: string) {
+    // etc.
+  }
+}
+```
+
+**Tarifs Resend** :
+- Gratuit : 3 000 emails/mois
+- Pro : $20/mois → 50 000 emails
+
+---
+
+## 📊 DASHBOARD BACKEND (Exemple)
+
+```typescript
+// dashboard/dashboard.service.ts
+export class DashboardService {
+  async getDashboard(userId: string, period: 'day' | 'week' | 'month') {
+    const { startDate, endDate } = this.getPeriodDates(period);
+    
+    // 1. Chiffre d'affaires
+    const recettes = await this.prisma.transaction.aggregate({
+      where: {
+        userId,
+        type: 'RECETTE',
+        date: { gte: startDate, lte: endDate },
+      },
+      _sum: { montant: true },
+    });
+    const ca = recettes._sum.montant || 0;
+    
+    // 2. Charges variables
+    const chargesVar = await this.prisma.transaction.aggregate({
+      where: {
+        userId,
+        type: 'DEPENSE',
+        date: { gte: startDate, lte: endDate },
+        categorie: { in: ['semences', 'carburant', 'transport', 'ingredients'] }, // etc.
+      },
+      _sum: { montant: true },
+    });
+    const cv = chargesVar._sum.montant || 0;
+    
+    // 3. Charges fixes
+    const chargesFix = await this.prisma.transaction.aggregate({
+      where: {
+        userId,
+        type: 'DEPENSE',
+        date: { gte: startDate, lte: endDate },
+        categorie: { in: ['loyer', 'taxes', 'salaires'] },
+      },
+      _sum: { montant: true },
+    });
+    const cf = chargesFix._sum.montant || 0;
+    
+    // 4. Amortissements
+    const equipments = await this.prisma.equipment.findMany({
+      where: { userId, isActive: true },
+    });
+    const amortTotal = equipments.reduce((sum, eq) => {
+      const days = this.getDaysBetween(startDate, endDate);
+      return sum + (eq.amortJournalier * days);
+    }, 0);
+    
+    // 5. Calculs indicateurs
+    const mcv = ca - cv;
+    const rn = ca - cv - cf - amortTotal;
+    const tauxMarge = ca > 0 ? (mcv / ca) * 100 : 0;
+    const tauxProfit = ca > 0 ? (rn / ca) * 100 : 0;
+    const sr = tauxMarge > 0 ? cf / (tauxMarge / 100) : 0;
+    
+    // 6. Trésorerie
+    const tresorerie = await this.calculateTresorerie(userId);
+    
+    // 7. Alertes
+    const alertes = [];
+    if (cv + cf > ca * 0.80) alertes.push('depenses_elevees');
+    if (ca < sr) alertes.push('sr_non_atteint');
+    if (rn < 0) alertes.push('resultat_negatif');
+    
+    return {
+      periode: { startDate, endDate, type: period },
+      indicateurs: {
+        ca,
+        rn,
+        tauxProfit,
+        tresorerie,
+        ratioCharges: ca > 0 ? ((cv + cf) / ca) * 100 : 0,
+        seuilRentabilite: sr,
+        tauxMarge,
+        mcv,
+      },
+      alertes,
+    };
+  }
+}
+```
+
+---
+
+## ⚡ PERFORMANCE & CACHE
+
+```typescript
+// common/decorators/cache.decorator.ts
+import { CACHE_MANAGER, Inject } from '@nestjs/common';
+import { Cache } from 'cache-manager';
+
+export class CacheService {
+  constructor(@Inject(CACHE_MANAGER) private cache: Cache) {}
+  
+  async get<T>(key: string): Promise<T | undefined> {
+    return this.cache.get<T>(key);
+  }
+  
+  async set(key: string, value: any, ttl: number = 3600) {
+    await this.cache.set(key, value, ttl);
+  }
+  
+  async del(key: string) {
+    await this.cache.del(key);
+  }
+}
+
+// Usage
+@Get('metiers')
+async getMetiers() {
+  const cached = await this.cacheService.get('metiers');
+  if (cached) return cached;
+  
+  const metiers = await this.prisma.metier.findMany();
+  await this.cacheService.set('metiers', metiers, 86400); // 24h
+  
+  return metiers;
+}
+```
+
+---
+
+## 📈 MONITORING & LOGS
+
+```typescript
+// main.ts
+import * as Sentry from '@sentry/node';
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV,
+});
+
+// Logger Pino
+import { Logger } from 'nestjs-pino';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule, {
+    logger: ['error', 'warn', 'log'],
+  });
+  
+  app.useLogger(app.get(Logger));
+  
+  await app.listen(3000);
+}
+```
+
+---
+
+## 🎯 PROCHAINES ÉTAPES
+
+1. ✅ Créer projet NestJS `backend-v2/`
+2. ✅ Setup Prisma + schema complet
+3. ✅ Implémenter AuthModule
+4. ✅ Implémenter DashboardModule (Phase 1)
+5. ✅ Implémenter EquipmentsModule (Phase 1)
+6. ✅ Implémenter ClientsModule (Phase 1)
+7. ✅ Setup PostgreSQL (local ou Railway)
+8. ✅ Tests unitaires
+9. ✅ Déploiement Railway
+10. ✅ Migration données AWS → PostgreSQL
+
+---
+
+**Prêt à démarrer ? On commence par quel module ?** 🚀

@@ -1,0 +1,586 @@
+// C'PRO - Schéma Prisma Complet
+// Version: 2.0.0
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// ══════════════════════════════════════════════════════════════
+// AUTHENTIFICATION & UTILISATEURS
+// ══════════════════════════════════════════════════════════════
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String    // bcrypt hash
+  emailVerified Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  role          UserRole  @default(USER)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  // Relations
+  profile       Profile?
+  transactions  Transaction[]
+  equipments    Equipment[]
+  clients       Client[]
+  goals         SavingGoal[]
+  documents     Document[]
+  notifications Notification[]
+  subscription  Subscription?
+  missions      Mission[]
+  momoTx        MoMoTransaction[]
+  fiscalDecl    FiscalDeclaration[]
+  pushTokens    PushToken[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  USER       // Micro-entrepreneur classique
+  VENDOR     // Vendeur TikTok/WhatsApp
+  PRO        // Client Services Comptables Pro
+  ADMIN      // Admin cabinet C'PRO
+  DGI        // Accès interface DGI
+}
+
+model Profile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nom               String
+  prenom            String?
+  telephone         String?
+  telephoneMomo     String?  // Numéro Mobile Money
+  metierSlug        String   // Référence vers CONFIG
+  lieu              String   // Ville/commune d'exercice
+
+  capitalDepart     Float    // Capital initial FCFA
+  modeFinancement   String   // Fonds propres, Emprunt, Tontine, Mixte
+  devise            String   @default("XOF")
+
+  objectifCaMensuel Float?   // Objectif CA mensuel (optionnel)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([metierSlug])
+  @@map("profiles")
+}
+
+// ══════════════════════════════════════════════════════════════
+// TRANSACTIONS COMPTABLES
+// ══════════════════════════════════════════════════════════════
+
+model Transaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            TxType   // RECETTE | DEPENSE
+  montant         Float    // Montant FCFA
+  categorie       String   // ID catégorie selon métier
+  sousCategorie   String?
+
+  quantite        Int?
+  prixUnitaire    Float?
+
+  modePaiement    PaymentMode
+  clientId        String?  // Si vente à crédit
+  client          Client?  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  date            DateTime // Date de la transaction
+  notes           String?
+  syncedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([clientId])
+  @@map("transactions")
+}
+
+enum TxType {
+  RECETTE
+  DEPENSE
+}
+
+enum PaymentMode {
+  ESPECES
+  MOBILE_MONEY_MTN
+  MOBILE_MONEY_MOOV
+  FEDAPAY
+  KKIAPAY
+  CREDIT_CLIENT
+  CHEQUE
+  VIREMENT
+}
+
+// ══════════════════════════════════════════════════════════════
+// ÉQUIPEMENTS & AMORTISSEMENTS
+// ══════════════════════════════════════════════════════════════
+
+model Equipment {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nom             String   // Ex: Moto, Congélateur, Machine à coudre
+  typeSlug        String   // Référence vers CONFIG amortissements
+  valeurAchat     Float    // Prix d'achat FCFA
+  dureeVieAns     Int      // Durée de vie en années
+
+  dateAchat       DateTime
+
+  // Calculs automatiques
+  amortAnnuel     Float    // valeurAchat / dureeVieAns
+  amortMensuel    Float    // amortAnnuel / 12
+  amortJournalier Float    // amortAnnuel / 365
+
+  valeurResiduelle Float   // valeurAchat - (amortJournalier × jours écoulés)
+
+  isActive        Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@index([typeSlug])
+  @@map("equipments")
+}
+
+// ══════════════════════════════════════════════════════════════
+// CLIENTS & CRÉANCES
+// ══════════════════════════════════════════════════════════════
+
+model Client {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nom             String
+  prenom          String?
+  telephone       String?
+  email           String?
+  adresse         String?
+
+  soldeCredit     Float    @default(0) // Montant dû par le client
+  limitCredit     Float?   // Limite de crédit autorisée
+
+  transactions    Transaction[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@map("clients")
+}
+
+// ══════════════════════════════════════════════════════════════
+// OBJECTIFS D'ÉPARGNE
+// ══════════════════════════════════════════════════════════════
+
+model SavingGoal {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  titre           String   // Ex: Acheter un terrain
+  montantCible    Float    // FCFA
+  montantActuel   Float    @default(0)
+  epargneParMois  Float    // Capacité d'épargne mensuelle
+
+  dateObjectif    DateTime // Date visée
+  dateAtteinte    DateTime? // Date réelle si atteint
+
+  statut          GoalStatus @default(EN_COURS)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@map("saving_goals")
+}
+
+enum GoalStatus {
+  EN_COURS
+  ATTEINT
+  ABANDONNE
+}
+
+// ══════════════════════════════════════════════════════════════
+// DOCUMENTS GÉNÉRÉS
+// ══════════════════════════════════════════════════════════════
+
+model Document {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            DocType
+  titre           String
+  numero          String   // CPRO-YYYY-NNNN
+
+  clientNom       String?
+  clientEmail     String?
+
+  montantHT       Float?
+  montantTVA      Float?
+  montantTTC      Float?
+
+  dateEmission    DateTime
+  dateEcheance    DateTime?
+
+  statut          DocStatus @default(BROUILLON)
+
+  // Stockage
+  storagePath     String?  // Chemin Cloudflare R2 ou local
+  storageUrl      String?  // URL signée temporaire
+
+  // Transformation
+  sourceDocId     String?  // Si transformé depuis un devis
+  sourceDoc       Document? @relation("DocTransform", fields: [sourceDocId], references: [id])
+  transformedDocs Document[] @relation("DocTransform")
+
+  metadata        Json?    // Données spécifiques au type
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId, type])
+  @@index([numero])
+  @@map("documents")
+}
+
+enum DocType {
+  DEVIS_1
+  DEVIS_2
+  DEVIS_3
+  DEVIS_4
+  FACTURE_PRODUIT
+  FACTURE_SERVICE
+  RH_FICHE_PAIE_PRESTATAIRE
+  RH_FICHE_PAIE_SALARIE
+  RH_RECU_TACHE
+  CONTRAT_CDI
+  CONTRAT_PRESTATION
+}
+
+enum DocStatus {
+  BROUILLON
+  EMIS
+  ENVOYE
+  PAYE
+  ANNULE
+}
+
+// ══════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ══════════════════════════════════════════════════════════════
+
+model PushToken {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token           String   @unique // FCM token
+  platform        String   // ios | android
+
+  isActive        Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@map("push_tokens")
+}
+
+model Notification {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            NotifType
+  titre           String
+  message         String 
+  lu              Boolean  @default(false)
+
+  metadata        Json?
+
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime // TTL 90 jours
+
+  @@index([userId, lu])
+  @@index([expiresAt])
+  @@map("notifications")
+}
+
+enum NotifType {
+  ALERTE_DEPENSES
+  ALERTE_SR
+  ALERTE_RESULTAT_NEGATIF
+  RAPPEL_SAISIE
+  OBJECTIF_EPARGNE
+  REMBOURSEMENT_DETTE
+  SYSTEME
+}
+
+// ══════════════════════════════════════════════════════════════
+// SERVICES COMPTABLES PRO (VOLET B)
+// ══════════════════════════════════════════════════════════════
+
+model Subscription {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  plan            SubPlan
+  montantMensuel  Float    // 10000, 35000, 120000 FCFA
+
+  statut          SubStatus @default(ACTIF)
+
+  dateDebut       DateTime
+  dateFin         DateTime?
+
+  autoRenew       Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+enum SubPlan {
+  ESSENTIELLE  // 10 000 FCFA
+  PRO          // 35 000 FCFA
+  BUSINESS     // 120 000 FCFA
+}
+
+enum SubStatus {
+  ACTIF
+  SUSPENDU
+  EXPIRE
+  ANNULE
+}
+
+model Mission {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type            MissionType
+  titre           String
+  description     String?
+  montant         Float
+  statut          MissionStatus @default(BROUILLON)
+
+  dateDebut       DateTime?
+  dateEcheance    DateTime?
+  dateTerminee    DateTime?
+
+  rapportPath     String?  // Chemin rapport PDF
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@map("missions")
+}
+
+enum MissionType {
+  AUDIT_COMPTABLE
+  DECLARATION_FISCALE
+  BILAN_ANNUEL
+  FORMATION
+  CONSEIL
+}
+
+enum MissionStatus {
+  BROUILLON
+  EN_COURS
+  TERMINEE
+  PAYEE
+  ANNULEE
+}
+
+// ══════════════════════════════════════════════════════════════
+// FISCALITÉ DGI (VOLET C)
+// ══════════════════════════════════════════════════════════════
+
+model MoMoTransaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider        String   // MTN | MOOV
+  transactionRef  String   @unique // Référence externe
+
+  montant         Float
+  type            String   // SEND | RECEIVE
+
+  numeroEmetteur  String?
+  numeroReceveur  String?
+
+  statut          String   // SUCCESS | PENDING | FAILED
+
+  metadata        Json?
+
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([transactionRef])
+  @@map("momo_transactions")
+}
+
+model FiscalDeclaration {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  annee           Int
+  mois            Int
+
+  chiffreAffaires Float
+  chargesTotal    Float
+  resultatNet     Float
+
+  typeImpot       String   // IMPOT_SYNTHETIQUE | TAXE_PROFESSIONNELLE
+  montantImpot    Float
+  tauxApplique    Float    // % selon barème
+
+  statut          DeclStatus @default(BROUILLON)
+
+  dateSoumission  DateTime?
+  datePaiement    DateTime?
+
+  referencePayment String?  // Référence paiement Mobile Money
+  recuPath        String?   // Chemin reçu PDF
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, annee, mois])
+  @@index([userId])
+  @@map("fiscal_declarations")
+}
+
+enum DeclStatus {
+  BROUILLON
+  SOUMISE
+  PAYEE
+  REJETEE
+}
+
+model BadgeConformite {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+
+  estConforme     Boolean  @default(false)
+
+  // Critères
+  facturesEmises  Int      @default(0)
+  declEnJour      Boolean  @default(false)
+  paiementsOk     Boolean  @default(false)
+
+  dateObtention   DateTime?
+  dateExpiration  DateTime?
+
+  imagePath       String?  // Badge PNG/SVG généré
+
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId])
+  @@map("badges_conformite")
+}
+
+// ══════════════════════════════════════════════════════════════
+// CONFIGURATION (SEED DATA)
+// ══════════════════════════════════════════════════════════════
+
+model Metier {
+  slug            String   @id
+  label           String
+
+  categories      Json     // Array de catégories dépenses
+  formules        Json     // Array de formules spécifiques
+  equipements     Json     // Array d'équipements par défaut
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("metiers_config")
+}
+
+model Amortissement {
+  id              String   @id @default(uuid())
+  typeSlug        String   @unique
+  label           String
+
+  dureeAns        Int
+  valeurType      Float    // Valeur type en FCFA
+
+  updatedAt       DateTime @updatedAt
+
+  @@map("amortissements_config")
+}
+
+model IMF {
+  slug            String   @id
+  nom             String
+  description     String?
+  montantMin      Float
+  montantMax      Float
+  tauxAnnuel      Float
+  dureeMaxMois    Int
+
+  criteres        Json     // Array de critères éligibilité
+  contact         String?
+
+  ville           String?
+  zone            String?  // nationale, rurale, urbaine
+
+  accepteMobileMoney Boolean @default(false)
+
+  updatedAt       DateTime @updatedAt
+
+  @@index([zone])
+  @@map("imf_config")
+}
+
+model ContenuAcademie {
+  id              String   @id @default(uuid())
+  type            ContentType
+
+  slug            String   @unique
+  titre           String
+  explication     String?  contenu         String?  conseil         String?
+  niveau          String?  // Débutant, Intermédiaire, Avancé
+  videoUrl        String?
+  dureeMin        Int?
+
+  ordre           Int      @default(0)
+
+  updatedAt       DateTime @updatedAt
+
+  @@index([type])
+  @@map("contenus_academie")
+}
+
+enum ContentType {
+  GLOSSAIRE
+  FICHE
+  VIDEO
+}
